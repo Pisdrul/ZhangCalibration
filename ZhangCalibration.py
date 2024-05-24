@@ -38,7 +38,6 @@ def estimateHomography(corners, real_coordinates):
 
     U, S, Vtransposed = np.linalg.svd(A) #questo serve per scomporre la matrice in U * S * V 
     h =Vtransposed.transpose()[:,-1] #ci serve V trasposta e solo l'ultima colonna
-    np.linalg.norm( A - U[:,:9]@np.diag(S)@Vtransposed )
     H = h.reshape(3,3) #da un array 9 a un 3x3
     #H è la nostra omografia!
     print(H)
@@ -59,36 +58,116 @@ def is_pos_def(x):
 
 #carica immagini
 folderpath= 'images/'
-filepath = folderpath + "image02.tiff"
-image = cv2.imread(filepath)
+images_path = [os.path.join(folderpath, imagename) for imagename in os.listdir(folderpath) if imagename.endswith(".tiff")]
+images_path.sort()
 grid_size = (8,11)
-#trova corners (faccio prima senza refinement, dopo con)
-return_value, corners = cv2.findChessboardCorners(image, patternSize=grid_size)
-corners=corners.reshape((88,2)).copy()
+homographies = []
+for p in images_path:
+    corners = []
+    #trova corners (faccio prima senza refinement, dopo con)
+    print(p)
+    im = cv2.imread(p)
+    return_value, corners = cv2.findChessboardCorners(im, patternSize=grid_size, corners=None)
+    if not return_value:
+        print(f"pattern not found for image {p}")
+    corners=corners.reshape((88,2)).copy()
+    gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+    criteria = (cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 100, 0.001) # tuple for specifying the termination criteria of the iterative refinement procedure cornerSubPix()
+    corners = cv2.cornerSubPix(gray,corners,(5,5),(-1,-1),criteria)
+    real_coordinates = findRealCoordinates(corners)
+    H = estimateHomography(corners, real_coordinates)
+    homographies.append(H)
 
-
-real_coordinates = findRealCoordinates(corners)
-H = estimateHomography(corners, real_coordinates)
-
-
+print(homographies)
 #adesso che abbiamo l'omografia H, dobbiamo trovare P
 #per farlo seguiamo la procedura di zhang con Vb=0
 
 #Calcoliamo V
-V = np.empty((2,6))
-V[0]=findVijValue(H,0,1)
-V11= findVijValue(H,0,0)
-V22= findVijValue(H,1,1)
-V[1] = np.subtract(V11,V22)
-print(V)
+V = []
+for h in homographies:
+    #2 equazioni per ogni omografia 
+    v = []
+    v.append(findVijValue(h,0,1))
+    v11= findVijValue(h,0,0)
+    v22= findVijValue(h,1,1)
+    v.append(np.subtract(v11,v22))
+    print(v)
+    V.append(v)
 
 #Scomposizione UESt della matrice V
+V = np.array(V)
+V = V.reshape(40,6)
 U,E,Stransposed = np.linalg.svd(V)
 S = Stransposed.transpose()
 #la sol di Vb=0 è l'ultima colonna di S
 b = S[:,-1]
+print(S)
 B = np.empty((3,3))
 B[0]= [b[0],b[1],b[3]]
 B[1]= [b[1],b[2],b[4]]
 B[2]= [b[3],b[4],b[5]]
-#guarda meglio qua che dovrebbe avere i valori in diagonale dello stesso segno
+
+#Adesso che abbiamo B, dobbiamo farne la scomposizione di cholesky
+#se B non è pos def e dato che è definita per uno scale factor, possiamo moltiplicare B per -1
+
+if not is_pos_def(B):
+    B = -1 * B
+
+L= np.linalg.cholesky(B) #lower triangular
+Lt = L.transpose()
+print(L)
+print(Lt)
+
+#La calibration matrix è l'inversa della trasposta
+
+K = np.linalg.inv(Lt)
+#K(3,3) viene leggermente sopra 1, quindi lo settiamo a 1
+K[2][2] = 1
+print(K)
+#adesso calcoliamo r e t per ogni immagine
+rtMatrix = []
+count=0
+for h in homographies:
+    print(h)
+    h1 = h[:,0]
+    h2 = h[:,1]
+    h3 = h[:,2]
+    denonim = np.linalg.norm(np.linalg.inv(K)@h1)
+    lambd = 1/denonim
+    r1 = lambd *(np.linalg.inv(K)@h1)
+    r2 = lambd *(np.linalg.inv(K)@h2)
+    r3 = np.cross(r1,r2)
+    t = r1 = lambd *(np.linalg.inv(K)@h3)
+    rtMatrix.append([r1,r2,r3,t])
+    print(rtMatrix[count])
+    count+=1
+rtMatrix= np.array(rtMatrix)
+print(rtMatrix)
+
+#reprojection error, prendiamo l'immagine image03.tiff
+totRepErr= 0
+immagine = cv2.imread(folderpath + "image03.tiff")
+paramIntrinsechi = np.array(rtMatrix[3]).transpose()
+print(rtMatrix[3])
+print(rtMatrix[3].transpose())
+P = K@paramIntrinsechi
+return_value, puntipixel = cv2.findChessboardCorners(immagine, patternSize=grid_size, corners=None)
+puntipixel= puntipixel.reshape((88,2)).copy()
+coordReali =  findRealCoordinates(puntipixel)
+print(coordReali)
+for coord in coordReali:
+    #troviamo le coordinate omogenee
+    homog = np.array([coord[0],coord[1],0,1])
+    #proiettiamo
+    project_hom = P@homog
+    projections = np.empty(2)
+    projections[0]= int(project_hom[0]/project_hom[2])
+    projections[1] = int(project_hom[1]/project_hom[2])
+    immagine = cv2.circle(immagine, (int(projections[0]),int(projections[1])), radius=4, color=(255, 0, 0), thickness=1)
+plt.imshow(immagine)
+plt.show()
+
+
+
+    
+
