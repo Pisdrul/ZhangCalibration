@@ -67,10 +67,11 @@ for p in images_path:
     return_value, corners = cv2.findChessboardCorners(im, patternSize=grid_size, corners=None)
     if not return_value:
         print(f"pattern not found for image {p}")
+    corners=corners.reshape((88,2)).copy()    
+    gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+    criteria = (cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 100, 0.001) # tuple for specifying the termination criteria of the iterative refinement procedure cornerSubPix()
+    corners = cv2.cornerSubPix(gray,corners,(5,5),(-1,-1),criteria)
     corners=corners.reshape((88,2)).copy()
-    #gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
-    #criteria = (cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 100, 0.001) # tuple for specifying the termination criteria of the iterative refinement procedure cornerSubPix()
-    #corners = cv2.cornerSubPix(gray,corners,(5,5),(-1,-1),criteria)
     real_coordinates = findRealCoordinates(corners)
     H = estimateHomography(corners, real_coordinates)
     homographies.append(H)
@@ -172,17 +173,17 @@ for i,im in enumerate(images_path):
     overlay = image.copy()
     vx = bottom_left_corner_x + np.array([0, 0, rect_width, rect_width])
     vy = bottom_left_corner_y + np.array([0, rect_height, rect_height, 0])
-    homogeneousIN = np.vstack((vx, vy, np.ones_like(vx)))
-    homogeneousOUT = homographies[i] @ homogeneousIN #moltiplicazione tra mappa e input
+    paramIntrinsechi = np.array(rtMatrix[i])
+    P = K@paramIntrinsechi.transpose()
+    homogeneousIN = np.vstack((vx, vy, np.ones_like(vx), np.ones_like(vx)))
+    homogeneousOUT = P@ homogeneousIN #moltiplicazione tra mappa e input
     xyOUT = (homogeneousOUT/homogeneousOUT[2])[:2] #in questo caso stiamo dividendo per la terza variabile e teniamo le prime 2
     cv2.polylines(image,np.int32([xyOUT.transpose()]), isClosed=True, color=(0,0,0),thickness=4)
     cv2.fillPoly(overlay,np.int32([xyOUT.transpose()]),color=(255,0,0))
     #parte rialzata
-    height = 25
+    height = 30
     homogeneousIN2 = np.vstack((vx, vy, np.full_like(vx,height),np.ones_like(vx)))
-    paramIntrinsechi = np.array(rtMatrix[i])
-    P = K@paramIntrinsechi.transpose()
-    homogeneousOUT2 = P @homogeneousIN2
+    homogeneousOUT2 = P@homogeneousIN2
     xyzOUT = (homogeneousOUT2/homogeneousOUT2[2])[:2]
     cv2.polylines(image,np.int32([xyzOUT.transpose()]), isClosed=True, color=(0,0,0),thickness=4)
     cv2.fillPoly(overlay,np.int32([xyzOUT.transpose()]), color=(0,255,0))
